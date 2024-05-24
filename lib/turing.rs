@@ -33,7 +33,7 @@ pub enum TuringError {
     #[error("cannot write char to cell: {0}")]
     InvalidChar(#[from] std::char::TryFromCharError),
 
-    #[error("error while parsing: invalid character {0} at line {1}, char {2}")]
+    #[error("error while parsing: invalid character '{0}' at line {1}, char {2}")]
     InvalidParse(char, usize, usize),
 
     #[error("error while parsing: invalid loop terminator at line {0}, char {1}")]
@@ -195,7 +195,7 @@ impl Turing {
                 let c = try_read_char()?;
                 self.write_char(c)
             },
-            Action::Loop(l) => self.run_loop(l, live_output, output),
+            Action::Loop(l) => self.run_loop(l.as_ref(), live_output, output),
         }
     }
 
@@ -213,7 +213,6 @@ impl Turing {
         }
         Ok(self)
     }
-
 }
 
 fn try_read_byte() -> TuringResult<u8> {
@@ -245,7 +244,7 @@ impl std::fmt::Display for Output {
 }
 
 /// Syntax tree for a program.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     MoveL,
     MoveR,
@@ -255,11 +254,66 @@ pub enum Action {
     Write,
     ReadChar,
     WriteChar,
-    Loop(Vec<Action>),
+    Loop(Program),
 }
 
 /// A `Program` is a sequence of [`Action`]s.
-pub type Program = Vec<Action>;
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Program(pub Vec<Action>);
+
+impl From<Vec<Action>> for Program {
+    fn from(actions: Vec<Action>) -> Self { Self(actions) }
+}
+
+impl From<Program> for Vec<Action> {
+    fn from(program: Program) -> Self { program.0 }
+}
+
+impl AsRef<Vec<Action>> for Program {
+    fn as_ref(&self) -> &Vec<Action> { &self.0 }
+}
+
+impl AsMut<Vec<Action>> for Program {
+    fn as_mut(&mut self) -> &mut Vec<Action> { &mut self.0 }
+}
+
+impl AsRef<[Action]> for Program {
+    fn as_ref(&self) -> &[Action] { self.0.as_ref() }
+}
+
+impl AsMut<[Action]> for Program {
+    fn as_mut(&mut self) -> &mut [Action] { self.0.as_mut() }
+}
+
+impl IntoIterator for Program {
+    type Item = <Vec<Action> as IntoIterator>::Item;
+    type IntoIter = <Vec<Action> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter { self.0.into_iter() }
+}
+
+impl<'a> IntoIterator for &'a Program {
+    type Item = <&'a Vec<Action> as IntoIterator>::Item;
+    type IntoIter = <&'a Vec<Action> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter { self.0.iter() }
+}
+
+impl Program {
+    /// Create a new, empty program.
+    pub fn new() -> Self { Self::default() }
+
+    /// Add a new instruction to the end of the program.
+    pub fn push(&mut self, action: Action) { self.0.push(action); }
+}
+
+impl std::str::FromStr for Program {
+    type Err = TuringError;
+
+    fn from_str(s: &str) -> TuringResult<Self> {
+        parse(s.chars())
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 struct Position { line: usize, ch: usize }
@@ -276,7 +330,7 @@ enum ParserState {
 pub fn parse<I>(input: I) -> TuringResult<Program>
 where I: IntoIterator<Item = char>
 {
-    let mut program: Program = Vec::new();
+    let mut program: Program = Program::default();
     do_parse(
         input.into_iter(),
         ParserState::Normal,
@@ -290,12 +344,13 @@ fn do_parse<I>(
     mut input: I,
     state: ParserState,
     pos: Position,
-    buf: &mut Vec<Action>,
+    buf: &mut Program,
 ) -> TuringResult<(I, Position)>
 where I: Iterator<Item = char>
 {
     use ParserState::*;
     let mut cur = pos;
+    if state == InLoop { cur.ch += 1; }
     loop {
         match input.next() {
             None => match state {
@@ -364,7 +419,7 @@ where I: Iterator<Item = char>
             },
             Some('[') => match state {
                 Normal | InLoop => {
-                    let mut loop_buf: Program = Vec::new();
+                    let mut loop_buf = Program::new();
                     let rec = do_parse(input, InLoop, cur, &mut loop_buf)?;
                     cur = rec.1;
                     input = rec.0;
@@ -384,7 +439,7 @@ where I: Iterator<Item = char>
                     cur.ch += 1;
                 },
             },
-            Some(' ') => {
+            Some(' ') | Some('\t') => {
                 cur.ch += 1;
             },
             Some('\n') => {
@@ -394,35 +449,41 @@ where I: Iterator<Item = char>
                     return Ok((input, cur));
                 }
             },
-            Some('/') => match input.next() {
-                Some('/') => {
-                    cur.ch += 2;
-                    let rec = do_parse(input, LineComment, cur, buf)?;
-                    cur = rec.1;
-                    input = rec.0;
-                },
-                Some('*') => {
-                    cur.ch += 2;
-                    let rec = do_parse(input, BlockComment, cur, buf)?;
-                    cur = rec.1;
-                    input = rec.0;
-                },
-                _ => {
-                    return Err(
-                        TuringError::InvalidParse('/', cur.line, cur.ch)
-                    );
-                },
+            Some('/') => if state == Normal || state == InLoop {
+                match input.next() {
+                    Some('/') => {
+                        cur.ch += 2;
+                        let rec = do_parse(input, LineComment, cur, buf)?;
+                        cur = rec.1;
+                        input = rec.0;
+                    },
+                    Some('*') => {
+                        cur.ch += 2;
+                        let rec = do_parse(input, BlockComment, cur, buf)?;
+                        cur = rec.1;
+                        input = rec.0;
+                    },
+                    _ => {
+                        return Err(
+                            TuringError::InvalidParse('/', cur.line, cur.ch)
+                        );
+                    },
+                }
+            } else {
+                cur.ch += 1;
             },
-            Some('*') => match input.next() {
-                Some('/') => {
-                    cur.ch += 2;
-                    return Ok((input, cur));
-                },
-                _ => {
-                    return Err(
-                        TuringError::InvalidParse('*', cur.line, cur.ch)
-                    );
-                },
+            Some('*') => if state == BlockComment {
+                match input.next() {
+                    Some('/') => {
+                        cur.ch += 2;
+                        return Ok((input, cur));
+                    },
+                    _ => { cur.ch += 2; },
+                }
+            } else if state == LineComment {
+                cur.ch += 1;
+            } else {
+                return Err(TuringError::InvalidParse('*', cur.line, cur.ch));
             },
             Some(d) => match state {
                 LineComment | BlockComment => {
@@ -435,6 +496,4 @@ where I: Iterator<Item = char>
         }
     }
 }
-
-
 

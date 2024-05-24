@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{
     fs::File,
     io::Read,
@@ -17,7 +15,7 @@ struct A {
     /// Run a file as a script. Overridden by `-c`.
     file: Option<PathBuf>,
 
-    /// Program passed as a string.
+    /// Pass a program as a string.
     #[arg(short, long)]
     command: Option<String>,
 
@@ -32,7 +30,7 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(command) = command {
         let mut sim = Turing::default();
-        let prog = parse(command.chars())?;
+        let prog: Program = command.parse()?;
         let out = sim.run(&prog, !quiet)?;
         if quiet {
             out.into_iter().for_each(|o| { print!("{}", o); });
@@ -43,7 +41,7 @@ fn main() -> anyhow::Result<()> {
         let mut command = String::new();
         file.read_to_string(&mut command)?;
         let mut sim = Turing::default();
-        let prog = parse(command.chars())?;
+        let prog: Program = command.parse()?;
         let out = sim.run(&prog, !quiet)?;
         if quiet {
             out.into_iter().for_each(|o| { print!("{}", o); });
@@ -51,8 +49,8 @@ fn main() -> anyhow::Result<()> {
         }
     } else {
         println!(
-            "No input. Provide a filename or a raw program string with \
-            `-c`, or try `--help`."
+            "No input. Provide a filename or a raw program string with `-c`, \
+            or try `--help`."
         );
     }
     Ok(())

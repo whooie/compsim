@@ -17,6 +17,10 @@ name = "compsim"
 path = "src/brainfuck.rs"
 name = "brainfuck"
 
+[[bin]]
+path = "src/lambda.rs"
+name = "lambda"
+
 [profile.release]
 lto = true
 panic = "abort"
