@@ -1,0 +1,22 @@
+[package]
+name = "compsim"
+version = "0.1.0"
+authors = [ "whooie <wcwhuie@gmail.com>",]
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+clap = { version = "4.5.4", features = [ "derive",] }
+thiserror = "1.0.61"
+
+[lib]
+path = "lib/lib.rs"
+name = "compsim"
+
+[[bin]]
+path = "src/brainfuck.rs"
+name = "brainfuck"
+
+[profile.release]
+lto = true
+panic = "abort"
