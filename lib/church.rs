@@ -227,30 +227,42 @@ impl Lambda {
         self
     }
 
+    fn has_unreduced(&self) -> bool {
+        match self {
+            Self::Null => false,
+            Self::Sym(_) => false,
+            Self::Func(_, b) => b.has_unreduced(),
+            Self::App(a, b)
+                => a.has_unreduced() || b.has_unreduced() || a.is_func(),
+        }
+    }
+
     /// Perform β-reduction.
     pub fn reduce(&mut self) -> &mut Self {
-        match self {
-            Self::Null => { },
-            Self::Sym(_) => { },
-            Self::Func(_, b) => {
-                Rc::make_mut(b).reduce();
-            },
-            Self::App(a, b) => {
-                Rc::make_mut(a).reduce();
-                if a.is_null() {
-                    *self = Self::Null;
-                    return self;
-                }
-                Rc::make_mut(b).reduce();
-                if let Some(arg) = a.get_func_arg() {
-                    Rc::make_mut(a).substitute(&arg, b.as_ref());
-                    let Some(bod) = Rc::make_mut(a).get_func_body()
-                        else { unreachable!() };
-                    let mut new = Self::Null;
-                    swap(&mut new, bod);
-                    swap(&mut new, self);
-                }
-            },
+        while self.has_unreduced() {
+            match self {
+                Self::Null => { },
+                Self::Sym(_) => { },
+                Self::Func(_, b) => {
+                    Rc::make_mut(b).reduce();
+                },
+                Self::App(a, b) => {
+                    Rc::make_mut(a).reduce();
+                    if a.is_null() {
+                        *self = Self::Null;
+                        return self;
+                    }
+                    Rc::make_mut(b).reduce();
+                    if let Some(arg) = a.get_func_arg() {
+                        Rc::make_mut(a).substitute(&arg, b.as_ref());
+                        let Some(bod) = Rc::make_mut(a).get_func_body()
+                            else { unreachable!() };
+                        let mut new = Self::Null;
+                        swap(&mut new, bod);
+                        swap(&mut new, self);
+                    }
+                },
+            }
         }
         self
     }
