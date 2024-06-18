@@ -227,19 +227,19 @@ impl Lambda {
         self
     }
 
-    fn has_unreduced(&self) -> bool {
+    fn is_reducible(&self) -> bool {
         match self {
             Self::Null => false,
             Self::Sym(_) => false,
-            Self::Func(_, b) => b.has_unreduced(),
+            Self::Func(_, b) => b.is_reducible(),
             Self::App(a, b)
-                => a.has_unreduced() || b.has_unreduced() || a.is_func(),
+                => a.is_reducible() || b.is_reducible() || a.is_func(),
         }
     }
 
     /// Perform β-reduction.
     pub fn reduce(&mut self) -> &mut Self {
-        while self.has_unreduced() {
+        while self.is_reducible() {
             match self {
                 Self::Null => { },
                 Self::Sym(_) => { },
@@ -274,7 +274,7 @@ impl std::fmt::Display for Lambda {
             Self::Null => write!(f, "()"),
             Self::Sym(s) => write!(f, "{}", s),
             Self::Func(a, b) => write!(f, "(λ{}.{})", a, b.as_ref()),
-            Self::App(a, b) => write!(f, "({} {})", a.as_ref(), b.as_ref()),
+            Self::App(a, b) => write!(f, "{} {}", a.as_ref(), b.as_ref()),
         }
     }
 }
@@ -525,38 +525,64 @@ where I: Iterator<Item = char>
 
 /// Parse a stream of [tokens][tokenize] into a [`Lambda`].
 pub fn parse(tokens: &[Token]) -> LambdaResult<Lambda> {
-    do_parse(tokens, false)
+    do_parse(None, tokens, false)
 }
 
-fn do_parse(tokens: &[Token], in_arg: bool) -> LambdaResult<Lambda> {
+fn do_parse(acc: Option<Lambda>, tokens: &[Token], in_arg: bool)
+    -> LambdaResult<Lambda>
+{
     match tokens.len() {
-        0 => if in_arg { Err(MissingArg) } else { Ok(Lambda::Null) },
+        0 => if in_arg {
+            Err(MissingArg)
+        } else {
+            Ok(acc.unwrap_or(Lambda::Null))
+        },
         1 => if in_arg {
             Err(InvalidFunc)
         } else {
             match &tokens[0] {
-                Token::Null => Ok(Lambda::Null),
-                Token::Lambda => Err(InvalidFunc), // shouldn't happen if calling on
-                Token::Dot => Err(UnexpectedDot),  // output from `tokenize`
-                Token::Word(sym) => Ok(Lambda::Sym((&**sym).into())),
-                Token::SubExpr(expr) => do_parse(expr, false),
+                Token::Null => {
+                    let res = acc.map(|f| f.apply_to(Lambda::Null))
+                        .unwrap_or(Lambda::Null);
+                    Ok(res)
+                },
+                Token::Lambda => Err(InvalidFunc), // shouldn't happen if calling
+                Token::Dot => Err(UnexpectedDot),  // on output from `tokenize`
+                Token::Word(sym) => {
+                    let res
+                        = acc.map(|f| f.apply_to(Lambda::Sym((&**sym).into())))
+                        .unwrap_or(Lambda::Sym((&**sym).into()));
+                    Ok(res)
+                },
+                Token::SubExpr(expr) => {
+                    let expr = do_parse(None, expr, false)?;
+                    if let Some(f) = acc {
+                        Ok(f.apply_to(expr))
+                    } else {
+                        Ok(expr)
+                    }
+                },
             }
         },
         _ => match &tokens[0] {
             Token::Null => {
                 let f = Lambda::Null;
-                let on = do_parse(&tokens[1..], false)?;
-                Ok(Lambda::App(f.into(), on.into()))
+                do_parse(Some(f), &tokens[1..], false)
             },
             Token::Lambda => if in_arg {
                 Err(UnexpectedLambda)
             } else {
-                let arg = do_parse(&tokens[1..], true)?;
-                let Lambda::Sym(arg) = arg else { unreachable!() };
+                let Lambda::Sym(arg) = do_parse(None, &tokens[1..], true)?
+                    else { unreachable!() };
                 // if arg parse is successful, `tokens` is at least 3 items long
                 if tokens.len() > 3 {
-                    let body = do_parse(&tokens[3..], false)?;
-                    Ok(Lambda::Func(arg, body.into()))
+                    let body = do_parse(None, &tokens[3..], false)?;
+                    let term = Lambda::Func(arg, body.into());
+                    if let Some(f) = acc {
+                        Ok(f.apply_to(term))
+                    } else {
+                        Ok(term)
+                    }
                 } else {
                     Err(MissingBody)
                 }
@@ -572,16 +598,22 @@ fn do_parse(tokens: &[Token], in_arg: bool) -> LambdaResult<Lambda> {
                     Token::SubExpr(_) => Err(InvalidFunc),
                 }
             } else {
-                let f = Lambda::Sym((&**sym).into());
-                let on = do_parse(&tokens[1..], false)?;
-                Ok(Lambda::App(f.into(), on.into()))
+                let term = Lambda::Sym((&**sym).into());
+                if let Some(f) = acc {
+                    do_parse(Some(f.apply_to(term)), &tokens[1..], false)
+                } else {
+                    do_parse(Some(term), &tokens[1..], false)
+                }
             },
             Token::SubExpr(expr) => if in_arg {
                 Err(InvalidFunc)
             } else {
-                let f = do_parse(expr, false)?;
-                let on = do_parse(&tokens[1..], false)?;
-                Ok(Lambda::App(f.into(), on.into()))
+                let term = do_parse(None, expr, false)?;
+                if let Some(f) = acc {
+                    do_parse(Some(f.apply_to(term)), &tokens[1..], false)
+                } else {
+                    do_parse(Some(term), &tokens[1..], false)
+                }
             },
         },
     }
